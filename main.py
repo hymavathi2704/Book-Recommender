@@ -1,51 +1,36 @@
 import numpy as np
 import streamlit as st
 import pandas as pd
-
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
-# collaborative filtering works perfectly on local
-# from surprise import Reader, Dataset, SVD
-
-
-# @st.cache()
-# def read_ratings_data():
-#     return pd.read_csv('data/ratings.csv')
-
-
-# Updated caching for data loading and processing
 @st.cache_data
 def read_book_data():
-    return pd.read_csv(r'C:\Users\Hyma vathi\Desktop\App\books_cleaned.csv')
+    """Load the book dataset."""
+    return pd.read_csv(r'books_cleaned.csv')
 
 
 @st.cache_data
 def content(books):
+    """Generate a cosine similarity matrix for content-based filtering."""
     try:
-        # Create the 'content' column
         books['content'] = (pd.Series(books[['authors', 'title', 'genres', 'description']]
                                       .fillna('')
                                       .values.tolist())
                             .str.join(' '))
         
-        # Initialize TF-IDF Vectorizer with valid min_df
         tf_content = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), min_df=1, stop_words='english')
         tfidf_matrix = tf_content.fit_transform(books['content'])
-        st.write("TF-IDF matrix created successfully.")
-        
-        # Compute cosine similarity
         cosine = linear_kernel(tfidf_matrix, tfidf_matrix)
         index = pd.Series(books.index, index=books['title'])
         return cosine, index
     except Exception as e:
-        st.error(f"An error occurred in the content function: {str(e)}")
+        st.error(f"Error in content function: {str(e)}")
         raise
 
 
-
-
 def simple_recommender(books, n=5):
+    """Generate simple recommendations based on popularity and average ratings."""
     v = books['ratings_count']
     m = books['ratings_count'].quantile(0.95)
     R = books['average_rating']
@@ -57,130 +42,89 @@ def simple_recommender(books, n=5):
 
 
 def content_recommendation(books, title, n=5):
+    """Generate recommendations using content-based filtering."""
     try:
-        # Step 1: Generate cosine similarity matrix and indices
         cosine_sim, indices = content(books)
-        st.write("Cosine similarity matrix and indices created successfully.")
-        
-        # Step 2: Check if the title exists in indices
         if title not in indices:
             st.error(f"Book title '{title}' not found in the dataset.")
-            return pd.DataFrame()  # Return an empty DataFrame
-        
-        # Step 3: Retrieve index and similarity scores
+            return pd.DataFrame()
+
         idx = indices[title]
-        st.write(f"Index of selected book: {idx}")
-        
-        sim_scores = list(enumerate(cosine_sim[idx]))
-        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-        sim_scores = sim_scores[1:n + 1]  # Top N recommendations excluding the selected book
+        sim_scores = sorted(list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True)
+        sim_scores = sim_scores[1:n + 1]
         book_indices = [i[0] for i in sim_scores]
-        
-        # Step 4: Return recommendations
-        st.write("Recommendations generated successfully.")
         return books[['book_id', 'title', 'authors', 'average_rating', 'ratings_count']].iloc[book_indices]
     except Exception as e:
-        st.error(f"An error occurred in Content-Based Filtering: {str(e)}")
-        return pd.DataFrame()  # Return an empty DataFrame
-
+        st.error(f"Error in content recommendation: {str(e)}")
+        return pd.DataFrame()
 
 
 def improved_recommendation(books, title, n=5):
-    cosine_sim, indices = content(books)
-    idx = indices[title]
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    sim_scores = sim_scores[1:26]
-    book_indices = [i[0] for i in sim_scores]
-    books2 = books.iloc[book_indices][['book_id', 'title', 'authors', 'average_rating', 'ratings_count']]
+    """Generate enhanced recommendations with weighted ratings."""
+    try:
+        cosine_sim, indices = content(books)
+        if title not in indices:
+            st.error(f"Book title '{title}' not found in the dataset.")
+            return pd.DataFrame()
 
-    v = books2['ratings_count']
-    m = books2['ratings_count'].quantile(0.75)  # here the minimum rating is quantile 75
-    R = books2['average_rating']
-    C = books2['average_rating'].median()
-    books2['weighted_rating'] = (v / (v + m) * R) + (m / (m + v) * C)
+        idx = indices[title]
+        sim_scores = sorted(list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True)
+        sim_scores = sim_scores[1:26]
+        book_indices = [i[0] for i in sim_scores]
+        books2 = books.iloc[book_indices][['book_id', 'title', 'authors', 'average_rating', 'ratings_count']]
 
-    high_rating = books2[books2['ratings_count'] >= m]
-    high_rating = high_rating.sort_values('weighted_rating', ascending=False)
+        v = books2['ratings_count']
+        m = books2['ratings_count'].quantile(0.75)
+        R = books2['average_rating']
+        C = books2['average_rating'].median()
+        books2['weighted_rating'] = (v / (v + m) * R) + (m / (m + v) * C)
 
-    return high_rating[['book_id', 'title', 'authors', 'average_rating', 'ratings_count']].head(n)
+        high_rating = books2[books2['ratings_count'] >= m]
+        high_rating = high_rating.sort_values('weighted_rating', ascending=False)
+        return high_rating[['book_id', 'title', 'authors', 'average_rating', 'ratings_count']].head(n)
+    except Exception as e:
+        st.error(f"Error in improved recommendation: {str(e)}")
+        return pd.DataFrame()
 
 
-
-# App declaration
 def main():
-    st.set_page_config(page_title="Book Recommender", page_icon="📔", layout="centered", initial_sidebar_state="auto",
-                       menu_items=None)
+    st.set_page_config(page_title="Book Recommender", page_icon="📔", layout="centered")
 
-    # Header contents
     st.write('# Book Recommender')
     with st.expander("See explanation"):
         st.write("""
-            In this book recommender, there are three models available.
-            1. Simple Recommender
-            This model offers generalized recommendations to every user based on popularity and average rating of 
-            the book. This model does not provide user-specific recommendations.
-            
-            2.  Content Based Filtering
-            To personalise our recommendations, you need to pick your favorite book. The cosine similarity between 
-            books are measured, and then the model will suggest books that are most similar to a particular book that 
-            a user liked.
-            
-            3. Content Based Filtering+
-            The mechanism to remove books with low ratings has been added on top of the content based filtering.
-            This model will return books that are similar to your input, are popular and have high ratings.
-
-            """)
+            This app provides three recommendation models:
+            1. **Simple Recommender**: Based on popularity and average ratings.
+            2. **Content-Based Filtering**: Suggests books similar to the selected one.
+            3. **Enhanced Content-Based Filtering**: Filters out low-rated books for better recommendations.
+        """)
 
     books = read_book_data().copy()
 
-    # User input
     model, book_num = st.columns((2, 1))
-    selected_model = model.selectbox('Select model',
-                                     options=['Simple Recommender', 'Content Based Filtering',
-                                              'Content Based Filtering+'])
-    selected_book_num = book_num.selectbox('Number of books',
-                                           options=[5, 10, 15, 20, 25])
+    selected_model = model.selectbox('Select model', options=['Simple Recommender', 'Content-Based Filtering', 'Enhanced Content-Based Filtering'])
+    selected_book_num = book_num.selectbox('Number of books', options=[5, 10, 15, 20, 25])
 
     if selected_model == 'Simple Recommender':
         if st.button('Recommend'):
-            try:
-                recs = simple_recommender(books=books,
-                                          n=selected_book_num)
-                st.write(recs)
-            except:
-                st.error('Oops!. I need to fix this algorithm.')
+            recs = simple_recommender(books=books, n=selected_book_num)
+            st.write(recs)
 
-   
     else:
-        options = np.concatenate(([''], books["title"].unique()))
+        options = np.concatenate(([''], books['title'].unique()))
         book_title = st.selectbox('Pick your favorite book', options, 0)
 
-        if selected_model == 'Content Based Filtering':
-            if st.button('Recommend'):
-                if book_title == '':
-                    st.write('Please pick a book or use Rating-Popularity Model')
-                    return
-                try:
-                    recs = content_recommendation(books=books,
-                                                  title=book_title,
-                                                  n=selected_book_num)
-                    st.write(recs)
-                except:
-                    st.error('Oops! I need to fix this algorithm.')
-
-        elif selected_model == 'Content Based Filtering+':
+        if st.button('Recommend'):
             if book_title == '':
-                st.write('Please pick a book or use Simple Recommender')
+                st.error('Please pick a book.')
                 return
-            if st.button('Recommend'):
-                try:
-                    recs = improved_recommendation(books=books,
-                                                   title=book_title,
-                                                   n=selected_book_num)
-                    st.write(recs)
-                except:
-                    st.error('Oops! I need to fix this algorithm.')
+
+            if selected_model == 'Content-Based Filtering':
+                recs = content_recommendation(books=books, title=book_title, n=selected_book_num)
+            elif selected_model == 'Enhanced Content-Based Filtering':
+                recs = improved_recommendation(books=books, title=book_title, n=selected_book_num)
+            
+            st.write(recs)
 
 
 if __name__ == '__main__':
